@@ -1,0 +1,94 @@
+name: Sync fork and package desktop
+
+# 每天北京时间 00:00（= UTC 16:00）自动同步上游 GCWing/OpenBitFun，
+# 并按当天的 beta 序号触发 desktop-package.yml 打包。
+# 也可以在 Actions 页面手动触发（Run workflow）。
+
+on:
+  schedule:
+    # GitHub Actions 的 cron 使用 UTC：UTC 16:00 = 北京时间次日 00:00（晚上十二点）。
+    # 注意：高峰期定时触发可能延迟几分钟到几十分钟，属正常现象。
+    - cron: '0 16 * * *'
+  workflow_dispatch:
+
+# 向 fork 的 main 推送合并提交需要 contents: write；
+# 上游改动若涉及 .github/workflows/*（如 ci.yml），推送合并提交还需要 workflows: write，
+# 否则会被拒绝：refusing to allow a GitHub App to create or update workflow ...；
+# 触发 desktop-package.yml（workflow_dispatch API）需要 actions: write。
+permissions:
+  contents: write
+  workflows: write
+  actions: write
+
+concurrency:
+  group: sync-fork-and-package
+  cancel-in-progress: false
+
+env:
+  # gh CLI 在无 checkout 的目录里无法推断仓库，显式指定最稳妥
+  GH_REPO: ${{ github.repository }}
+  GH_TOKEN: ${{ github.token }}
+  # ── beta 序号规则：tag = v1.0.0-beta.(TAG_BASE + 与 TAG_ANCHOR 相差的天数，最小为 0) ──
+  # 北京时间 2026-09-21 当天构建 = v1.0.0-beta.17，之后每天 +1（如 09-23 → beta.19）。
+  # 想改起始号/起始日就改这两个变量。
+  TAG_BASE: '17'
+  TAG_ANCHOR: '2026-09-21'
+  # 同步与打包使用的分支
+  BUILD_BRANCH: 'main'
+  # 上游仓库
+  UPSTREAM_REPO: 'GCWing/OpenBitFun'
+
+jobs:
+  sync-and-package:
+    runs-on: ubuntu-latest
+    steps:
+      # 完整历史检出：merge 与统计落后提交数都需要
+      - name: Check out fork (main, full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 用 git 直接同步：fetch 上游 → 合并 → 推送 fork。
+      # 不再用 merge-upstream API（其 422 报错含义模糊，难以排查）。
+      # 你 fork main 上的 workflow 提交会以 merge commit 的形式与上游共存。
+      - name: Sync main with upstream
+        # 同步失败不阻断当天打包（用现有 main 构建）；想改为失败即停，删除下面这行
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch upstream "${BUILD_BRANCH}"
+          BEHIND="$(git rev-list --count "${BUILD_BRANCH}..upstream/${BUILD_BRANCH}")"
+          if [ "${BEHIND}" -eq 0 ]; then
+            echo "fork 的 ${BUILD_BRANCH} 已包含上游全部提交，无需同步"
+          else
+            echo "上游有 ${BEHIND} 个新提交（最新：$(git log -1 --format='%h %ad %s' --date=short upstream/${BUILD_BRANCH})），开始合并 ..."
+            git merge "upstream/${BUILD_BRANCH}" --no-edit
+            git push origin "${BUILD_BRANCH}"
+            echo "已将上游 ${BEHIND} 个新提交合并进 fork 的 ${BUILD_BRANCH} 并推送"
+          fi
+
+      - name: Compute today's beta tag
+        id: tag
+        run: |
+          set -euo pipefail
+          TODAY="$(TZ=Asia/Shanghai date +%F)"
+          DAYS=$(( ( $(date -d "${TODAY}" +%s) - $(date -d "${TAG_ANCHOR}" +%s) ) / 86400 ))
+          if [ "${DAYS}" -lt 0 ]; then DAYS=0; fi
+          TAG="v1.0.0-beta.$(( TAG_BASE + DAYS ))"
+          echo "北京时间 ${TODAY} → ${TAG}"
+          echo "tag=${TAG}" >> "${GITHUB_OUTPUT}"
+
+      - name: Trigger desktop-package.yml
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh workflow run desktop-package.yml --ref "${BUILD_BRANCH}" \
+            -f tag_name="${TAG}" \
+            -f checkout_ref="${BUILD_BRANCH}" \
+            -f release_channel=beta \
+            -F upload_to_release=false
+          echo "已触发 Desktop Package：tag=${TAG}，channel=beta，checkout=${BUILD_BRANCH}"
