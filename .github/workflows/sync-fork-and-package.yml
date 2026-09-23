@@ -8,7 +8,7 @@ on:
   schedule:
     # GitHub Actions 的 cron 使用 UTC：UTC 16:00 = 北京时间次日 00:00。
     # 注意：高峰期定时触发可能延迟几分钟到几十分钟，属正常现象。
-    - cron: '0 16 * * *'
+    - cron: '0 18 * * *'
   workflow_dispatch:
 
 # 向 fork 的 main 推送合并提交需要 contents: write；
