@@ -6,18 +6,17 @@ name: Sync fork and package desktop
 
 on:
   schedule:
-    # GitHub Actions 的 cron 使用 UTC：UTC 16:00 = 北京时间次日 00:00（晚上十二点）。
+    # GitHub Actions 的 cron 使用 UTC：UTC 16:00 = 北京时间次日 00:00。
     # 注意：高峰期定时触发可能延迟几分钟到几十分钟，属正常现象。
     - cron: '0 16 * * *'
   workflow_dispatch:
 
 # 向 fork 的 main 推送合并提交需要 contents: write；
-# 上游改动若涉及 .github/workflows/*（如 ci.yml），推送合并提交还需要 workflows: write，
-# 否则会被拒绝：refusing to allow a GitHub App to create or update workflow ...；
 # 触发 desktop-package.yml（workflow_dispatch API）需要 actions: write。
+# 注意：不要在这里加 workflows: write——GitHub 运行时会拒绝整个文件，
+# 导致本 workflow 显示为路径名、运行时 startup_failure（v4 的教训）。
 permissions:
   contents: write
-  workflows: write
   actions: write
 
 concurrency:
@@ -42,17 +41,17 @@ jobs:
   sync-and-package:
     runs-on: ubuntu-latest
     steps:
-      # 完整历史检出：merge 与统计落后提交数都需要
+      # 完整历史 checkout：合并与统计落后提交数都需要
       - name: Check out fork (main, full history)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # 用 git 直接同步：fetch 上游 → 合并 → 推送 fork。
-      # 不再用 merge-upstream API（其 422 报错含义模糊，难以排查）。
-      # 你 fork main 上的 workflow 提交会以 merge commit 的形式与上游共存。
+      # git 直接同步：fetch 上游 -> merge -> push。
+      # GITHUB_TOKEN 无法更新 .github/workflows/ 下的文件；若上游这次改动
+      # 包含 workflow 文件导致推送被拒收，则自动降级为“只同步代码”的合并提交。
       - name: Sync main with upstream
-        # 同步失败不阻断当天打包（用现有 main 构建）；想改为失败即停，删除下面这行
+        # 同步失败不阻断当天打包；想让失败即停就删除下面这行
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -60,14 +59,38 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
           git fetch upstream "${BUILD_BRANCH}"
+          BASE="$(git rev-parse HEAD)"
           BEHIND="$(git rev-list --count "${BUILD_BRANCH}..upstream/${BUILD_BRANCH}")"
           if [ "${BEHIND}" -eq 0 ]; then
-            echo "fork 的 ${BUILD_BRANCH} 已包含上游全部提交，无需同步"
+            echo "fork ${BUILD_BRANCH} 已包含上游全部提交，无需同步"
+            exit 0
+          fi
+          echo "上游有 ${BEHIND} 个新提交（最新：$(git log -1 --format='%h %ad %s' --date=short "upstream/${BUILD_BRANCH}")），开始合并 ..."
+          if ! git merge "upstream/${BUILD_BRANCH}" --no-edit; then
+            echo "合并出现冲突，无法自动同步；请在 fork 页面处理，或把日志发给助手。"
+            exit 1
+          fi
+          if git push origin "${BUILD_BRANCH}"; then
+            echo "已将上游 ${BEHIND} 个新提交合并进 ${BUILD_BRANCH} 并推送"
+            exit 0
+          fi
+          echo "推送被拒收：上游这次改动包含 .github/workflows/ 下的文件，GITHUB_TOKEN 无权更新它们。"
+          echo "降级为只同步代码：workflow 文件保持本仓库现状。"
+          git reset --hard "${BASE}"
+          if ! git merge "upstream/${BUILD_BRANCH}" --no-commit --no-ff >/dev/null 2>&1; then
+            git merge --abort >/dev/null 2>&1 || true
+            echo "自动同步失败（重试合并异常）；请在 fork 页面手动 Sync fork，或把日志发给助手。"
+            exit 1
+          fi
+          git checkout "${BASE}" -- .github/workflows
+          if git diff --cached --quiet -- . ':(exclude).github/workflows'; then
+            git merge --abort >/dev/null 2>&1 || true
+            echo "上游这次只改了 workflow 文件，已全部跳过；如需更新它们，请在 fork 页面点 Sync fork → Update branch。"
           else
-            echo "上游有 ${BEHIND} 个新提交（最新：$(git log -1 --format='%h %ad %s' --date=short upstream/${BUILD_BRANCH})），开始合并 ..."
-            git merge "upstream/${BUILD_BRANCH}" --no-edit
+            git commit -m "Merge upstream ${BUILD_BRANCH} (code changes only)" >/dev/null
+            git merge --abort >/dev/null 2>&1 || true
             git push origin "${BUILD_BRANCH}"
-            echo "已将上游 ${BEHIND} 个新提交合并进 fork 的 ${BUILD_BRANCH} 并推送"
+            echo "已同步上游代码改动（不含上游 workflow 文件的更新；可用 fork 页面 Sync fork 手动拉取）。"
           fi
 
       - name: Compute today's beta tag
