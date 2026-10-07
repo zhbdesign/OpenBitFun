@@ -2278,7 +2278,7 @@ impl SessionManager {
         let event = EvidenceLedgerEvent::new(
             session_id,
             turn_id,
-            "Task",
+            "AgentSpawn",
             EvidenceLedgerTargetKind::Subagent,
             subagent_type,
             EvidenceLedgerEventStatus::PartialTimeout,
@@ -10022,6 +10022,8 @@ mod tests {
         SessionRelationship, SessionRelationshipKind, ToolCallData, ToolItemData, ToolResultData,
         TurnStatus, UserMessageData,
     };
+    #[cfg(feature = "remote-workspace")]
+    use crate::service::WorkspaceRuntimeService;
     use crate::util::errors::OpenBitFunError;
     use dashmap::{try_result::TryResult, DashMap};
     use openbitfun_core_types::{
@@ -15019,12 +15021,13 @@ mod tests {
         let workspace = TestWorkspace::new();
         let path_manager = workspace.path_manager();
         let port = CoreSessionStorePort::with_path_manager_for_tests(path_manager.clone());
-        let sessions_dir =
-            openbitfun_services_integrations::remote_ssh::remote_workspace_session_mirror_dir(
-                path_manager.remote_ssh_mirror_root_dir(),
-                "example-host",
-                "/root/repo",
-            );
+        WorkspaceRuntimeService::new(path_manager.clone())
+            .ensure_remote_workspace_runtime("example-host", "/root/repo")
+            .await
+            .expect("remote runtime should be ensured");
+        let runtime = WorkspaceRuntimeService::new(path_manager.clone())
+            .context_for_remote_workspace("example-host", "/root/repo");
+        let sessions_dir = runtime.sessions_dir;
         let resolved = port
             .resolve_session_storage_path(SessionStoragePathRequest {
                 workspace_path: sessions_dir.clone(),
@@ -15037,12 +15040,7 @@ mod tests {
         assert_eq!(resolved.storage_kind, SessionStorageKind::Remote);
         assert_eq!(resolved.effective_storage_path, sessions_dir);
 
-        let runtime_root =
-            openbitfun_services_integrations::remote_ssh::remote_workspace_runtime_root(
-                path_manager.remote_ssh_mirror_root_dir(),
-                "example-host",
-                "/root/repo",
-            );
+        let runtime_root = runtime.runtime_root;
         let runtime_root_resolution = port
             .resolve_session_storage_path(SessionStoragePathRequest {
                 workspace_path: runtime_root.clone(),
@@ -18374,7 +18372,7 @@ mod tests {
             )
             .await
             .expect("session should be created");
-        let identity = SystemPromptCacheIdentity::new("template:agentic_mode");
+        let identity = SystemPromptCacheIdentity::new("template:standard_mode");
         let user_context_identity = UserContextCacheIdentity::new(
             "workspace_context|workspace_instructions|project_layout",
         );
@@ -18816,7 +18814,7 @@ mod tests {
             )
             .await
             .expect("session should be created");
-        let identity = SystemPromptCacheIdentity::new("template:agentic_mode");
+        let identity = SystemPromptCacheIdentity::new("template:standard_mode");
         let user_context_identity = UserContextCacheIdentity::new(
             "workspace_context|workspace_instructions|project_layout",
         );
@@ -18979,7 +18977,7 @@ mod tests {
             )
             .await
             .expect("target session should be created");
-        let identity = SystemPromptCacheIdentity::new("template:agentic_mode");
+        let identity = SystemPromptCacheIdentity::new("template:standard_mode");
         let user_context_identity = UserContextCacheIdentity::new(
             "workspace_context|workspace_instructions|project_layout",
         );
@@ -19060,7 +19058,7 @@ mod tests {
             )
             .await
             .expect("session should be created");
-        let identity = SystemPromptCacheIdentity::new("template:agentic_mode");
+        let identity = SystemPromptCacheIdentity::new("template:standard_mode");
         let user_context_identity = UserContextCacheIdentity::new(
             "workspace_context|workspace_instructions|project_layout",
         );
