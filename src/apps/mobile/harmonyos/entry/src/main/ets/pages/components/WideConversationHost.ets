@@ -50,6 +50,8 @@ export struct WideConversationHost {
   @Param filePreviewLayout: FilePreviewLayout = new FilePreviewLayout(FilePreviewPlacement.Hidden);
   @Param sessionDetailsPlacement: SettingsPlacement =
     SettingsPlacementPolicy.compactBottom(SettingsSheetKind.SessionDetails);
+  @Param fullTextSheetPlacement: SettingsPlacement =
+    SettingsPlacementPolicy.compactBottom(SettingsSheetKind.UserMessageFullText);
   @Param wideMasterPaneWidth: number = 0;
   @Param wideMasterDetailGap: number = 0;
   @Param wideDetailContentOffset: number = 0;
@@ -136,9 +138,11 @@ export struct WideConversationHost {
 
       if (this.wideMasterPaneCollapsed) {
         // The detail pane's top edge is the window's, so the floating control
-        // keeps the status bar strip above it instead of sitting under it.
+        // keeps the status bar strip above it instead of sitting under it — and
+        // its left edge is the window's too, which is the edge a rotated device
+        // moves the camera cutout onto.
         SidebarToggleButton({ restore: true, controlSize: 44, onToggle: this.onRestoreMasterPane })
-          .position({ x: 12, y: 12 + this.insets.top }).zIndex(2)
+          .position({ x: this.insets.leftPadding(12), y: 12 + this.insets.top }).zIndex(2)
           .hitTestBehavior(HitTestMode.Default)
       }
     }
@@ -362,6 +366,7 @@ export struct WideConversationHost {
         this.filePreviewLayout
       ),
       useWidePresentation: true,
+      fullTextSheetPlacement: this.fullTextSheetPlacement,
       onRestoreSidebar: this.onRestoreMasterPane
     })
   }
